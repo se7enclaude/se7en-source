@@ -19,6 +19,13 @@
         <!-- Barre de titre -->
         <DockPanel Grid.Row="0" LastChildFill="True">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="OnIdentify"
+                        WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Afficher le nom de chaque écran sur l'écran lui-même">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE7F4;" FontFamily="{StaticResource FontIcons}" FontSize="12" VerticalAlignment="Center" />
+                        <TextBlock Text="Identifier" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
                 <Button x:Name="RefreshButton" Style="{StaticResource GhostButton}" Margin="0,0,10,0" Click="OnRefresh"
                         WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Relire les écrans branchés">
                     <StackPanel Orientation="Horizontal">
@@ -30,9 +37,10 @@
                 <Button Style="{StaticResource ChromeButton}" Content="&#xE8BB;" Margin="6,0,0,0" Click="OnClose"
                         ToolTip="Fermer (l'appli reste près de l'horloge)" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="SE7EN SOURCE" Style="{StaticResource TitleText}" />
-                <TextBlock Text="Change l'entrée de ton écran en un clic" Style="{StaticResource LabelText}" Margin="16,3,0,0" />
+                <TextBlock Text="Change l'entrée de ton écran en un clic" Style="{StaticResource LabelText}" Margin="1,5,0,0"
+                           TextTrimming="CharacterEllipsis" />
             </StackPanel>
         </DockPanel>
 

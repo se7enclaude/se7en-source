@@ -12,6 +12,11 @@ public sealed class Monitor
     public required string Name { get; init; }            // « AG276QZD2 »
     public required bool IsPrimary { get; init; }
     public required int Number { get; init; }            // 1, 2… comme dans les réglages d'affichage de Windows
+    /// <summary>Rectangle de l'écran sur le bureau Windows (pixels) : sa position, gauche ou droite.</summary>
+    public required (int Left, int Top, int Right, int Bottom) Bounds { get; init; }
+    /// <summary>« de gauche », « de droite »… (voir Layout.PositionNames).</summary>
+    public string Position { get; set; } = "";
+    public string Title => string.IsNullOrEmpty(Position) ? $"Écran {Number}" : $"Écran {Position}";
     public IReadOnlyList<int> Inputs { get; init; } = [];
     public int? Current { get; set; }
     /// <summary>L'écran répond en DDC/CI (sinon : option désactivée dans son menu, ou adaptateur qui la bloque).</summary>
@@ -35,15 +40,16 @@ public sealed class Ddc : IDisposable
         lock (_lock)
         {
             Release();
-            var found = new List<(IntPtr HMon, string Device, bool Primary)>();
+            var found = new List<(IntPtr HMon, string Device, bool Primary, Rect Rect)>();
             EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
             {
                 var mi = new MonitorInfoEx { Size = Marshal.SizeOf<MonitorInfoEx>() };
-                if (GetMonitorInfo(h, ref mi)) found.Add((h, mi.Device, (mi.Flags & 1) != 0));
+                if (GetMonitorInfo(h, ref mi)) found.Add((h, mi.Device, (mi.Flags & 1) != 0, mi.Monitor));
                 return true;
             }, IntPtr.Zero);
 
-            foreach (var (hmon, device, primary) in found.OrderBy(f => DisplayNumber(f.Device)))
+            // de gauche à droite (puis de haut en bas), comme les écrans sur le bureau
+            foreach (var (hmon, device, primary, rect) in found.OrderBy(f => f.Rect.Left).ThenBy(f => f.Rect.Top))
             {
                 if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hmon, out uint n) || n == 0) continue;
                 var arr = new PhysicalMonitor[n];
@@ -59,11 +65,14 @@ public sealed class Ddc : IDisposable
                     _monitors.Add(new Monitor
                     {
                         Key = key, Device = device, IsPrimary = primary, Number = DisplayNumber(device),
+                        Bounds = (rect.Left, rect.Top, rect.Right, rect.Bottom),
                         Name = Inputs.Model(caps) ?? FriendlyName(arr[i].Description),
                         Inputs = inputs, Current = cur, Handle = arr[i].Handle,
                     });
                 }
             }
+            var names = Layout.PositionNames([.. _monitors.Select(m => (m.Bounds.Left, m.Bounds.Top, m.Bounds.Right - m.Bounds.Left, m.Bounds.Bottom - m.Bounds.Top))]);
+            for (int i = 0; i < _monitors.Count; i++) _monitors[i].Position = names[i];
             return [.. _monitors];
         }
     }
@@ -174,7 +183,7 @@ public sealed class Ddc : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct Rect { public int Left, Top, Right, Bottom; }
+    internal struct Rect { public int Left, Top, Right, Bottom; }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct DisplayDevice

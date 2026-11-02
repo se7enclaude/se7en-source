@@ -61,6 +61,14 @@ public partial class MainWindow : Window
         RefreshButton.IsEnabled = false;
         _monitors = await Task.Run(_ddc.Refresh);
         RefreshButton.IsEnabled = true;
+        // l'entrée affichée au lancement est celle du PC : on la nomme tout de suite (si rien n'est encore nommé)
+        foreach (var m in _monitors.Where(x => x.Responds && x.Current is int))
+            if (!m.Inputs.Any(i => _settings.HasCustomName(m.Key, i)))
+            {
+                _settings.Rename(m.Key, m.Current!.Value, "Ce PC");
+                _settings.SetSignal(m.Key, m.Current!.Value, Signal.Present);
+                Save();
+            }
         RegisterHotkeys();
         BuildUi();
         RebuildTrayMenu();
@@ -95,7 +103,7 @@ public partial class MainWindow : Window
         int? from = m.Current;
         if (from == input)
         {
-            if (!quiet) Toast($"{_settings.NameOf(m.Key, input)} est déjà affiché sur l'écran {m.Number}.");
+            if (!quiet) Toast($"{_settings.NameOf(m.Key, input)} est déjà affiché sur {The(m)}.");
             return true;
         }
         _busy = true;
@@ -106,11 +114,11 @@ public partial class MainWindow : Window
             if (from is int f) _settings.Remember(m.Key, f, input);
             _lastMonitor = m.Key;
             Save();
-            if (!quiet) Toast($"Écran {m.Number} → {Label(m, input)}");
+            if (!quiet) Toast($"{m.Title} → {Label(m, input)}");
         }
         else if (!quiet)
         {
-            Toast($"L'écran {m.Number} n'a pas répondu. S'il affiche une autre entrée, Windows l'a peut-être perdu : " +
+            Toast($"{Cap(The(m))} n'a pas répondu. S'il affiche une autre entrée, Windows l'a peut-être perdu : " +
                   "utilise le bouton de l'écran cette fois-ci, puis « Actualiser ».");
         }
         BuildUi();
@@ -139,15 +147,15 @@ public partial class MainWindow : Window
     {
         if (m.Current is not int back || _busy) return;
         var answer = MessageBox.Show(this,
-            $"L'écran {m.Number} va afficher {Inputs.PortName(input)} pendant 8 secondes, puis revenir tout seul sur " +
+            $"{Cap(The(m))} va afficher {Inputs.PortName(input)} pendant 8 secondes, puis revenir tout seul sur " +
             $"{Inputs.PortName(back)}.\n\nSi rien n'est allumé sur {Inputs.PortName(input)}, il affichera « pas de signal » : c'est normal.\n\nOn essaie ?",
             "Essayer l'aller-retour", MessageBoxButton.OKCancel, MessageBoxImage.Question);
         if (answer != MessageBoxResult.OK) return;
 
-        Toast($"Essai : l'écran {m.Number} passe sur {Inputs.PortName(input)} et revient dans 8 secondes…", 12);
+        Toast($"Essai : {The(m)} passe sur {Inputs.PortName(input)} et revient dans 8 secondes…", 12);
         if (!await SwitchToAsync(m, input, quiet: true))
         {
-            Toast($"L'écran {m.Number} n'accepte pas l'ordre de changer d'entrée.");
+            Toast($"{Cap(The(m))} n'accepte pas l'ordre de changer d'entrée.");
             return;
         }
         await Task.Delay(8000);
@@ -161,6 +169,65 @@ public partial class MainWindow : Window
                   "Pour revenir, utilise le bouton de l'écran (ou active sa « détection automatique de l'entrée »).", 14);
         Activate();
     }
+
+    /// <summary>Détecte les appareils branchés : l'écran passe sur chaque prise et on regarde s'il y reste.</summary>
+    private async Task DetectDevices(Services.Monitor m)
+    {
+        if (_busy || m.Current is not int pc) return;
+        var others = m.Inputs.Where(i => i != pc).ToList();
+        var answer = MessageBox.Show(this,
+            $"{Cap(The(m))} va passer environ 6 secondes sur chaque autre prise ({string.Join(", ", others.Select(Inputs.PortName))}), " +
+            $"puis revenir sur {Label(m, pc)}. Il va s'éteindre et se rallumer plusieurs fois : c'est normal.\n\n" +
+            "Allume d'abord la PS5 (ou l'appareil à trouver). On y va ?",
+            "Détecter les appareils branchés", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.OK) return;
+
+        var stayed = new Dictionary<int, bool>();
+        for (int k = 0; k < others.Count; k++)
+        {
+            int input = others[k];
+            Toast($"Détection {k + 1}/{others.Count} : {Inputs.PortName(input)}…", 15);
+            if (!await SwitchToAsync(m, input, quiet: true))
+            {
+                await SwitchToAsync(m, pc, quiet: true);
+                Toast($"{Cap(The(m))} n'accepte pas l'ordre de changer d'entrée.");
+                return;
+            }
+            await Task.Delay(6000);
+            int? now = await Task.Run(() => _ddc.ReadCurrent(m));
+            stayed[input] = now == input;
+        }
+        await SwitchToAsync(m, pc, quiet: true);
+        // pour la touche « revenir », l'entrée d'avant n'est pas une prise essayée pendant la détection
+        _settings.Recent.Remove(m.Key);
+
+        var result = Detection.Interpret(pc, stayed);
+        foreach (var (input, signal) in result) _settings.SetSignal(m.Key, input, signal);
+        Save();
+        BuildUi();
+        RebuildTrayMenu();
+        var found = result.Where(r => r.Key != pc && r.Value == Signal.Present).Select(r => Inputs.PortName(r.Key)).ToList();
+        if (result.Where(r => r.Key != pc).All(r => r.Value == Signal.Unknown))
+            Toast("Cet écran reste sur chaque prise même sans image : impossible de savoir lesquelles sont branchées. " +
+                  "Allume l'appareil, puis clique sur ses prises une par une.", 14);
+        else if (found.Count == 0)
+            Toast("Aucun autre appareil allumé trouvé. Allume la PS5 (pas en veille) et relance la détection.", 12);
+        else
+            Toast($"Appareil branché sur {string.Join(" et ", found)}. Clique sur le crayon pour lui donner un nom (ex. PS5).", 12);
+        Activate();
+    }
+
+    private void OnIdentify(object sender, RoutedEventArgs e)
+    {
+        foreach (var m in _monitors)
+            new IdentifyWindow(m.Bounds, m.Title,
+                $"{m.Name} · Windows : écran {m.Number}{(m.IsPrimary ? " · principal" : "")}" +
+                (m.Responds ? "" : " · ne répond pas (DDC/CI désactivé)")).Show();
+    }
+
+    private static string The(Services.Monitor m) => "l'" + char.ToLowerInvariant(m.Title[0]) + m.Title[1..];
+
+    private static string Cap(string s) => char.ToUpperInvariant(s[0]) + s[1..];
 
     // ---------------------------------------------------------------- interface
 
@@ -188,9 +255,12 @@ public partial class MainWindow : Window
     {
         var stack = new StackPanel();
         var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 0, 0, 12) };
-        head.Children.Add(Text($"ÉCRAN {m.Number}", "LabelText", strong: true));
+        var title = Text(m.Title.ToUpperInvariant(), "LabelText", strong: true);
+        title.FontSize = 13.5;
+        head.Children.Add(title);
         head.Children.Add(Text($"  ·  {(m.Responds ? m.Name : "ne répond pas")}", "LabelText"));
         if (m.IsPrimary) head.Children.Add(Chip("principal"));
+        head.Children.Add(Chip($"Windows : écran {m.Number}"));
         stack.Children.Add(head);
 
         if (!m.Responds)
@@ -205,6 +275,17 @@ public partial class MainWindow : Window
         var tiles = new WrapPanel();
         foreach (int input in m.Inputs) tiles.Children.Add(Tile(m, input));
         stack.Children.Add(tiles);
+        if (m.Inputs.Count > 1)
+        {
+            var detect = new Button
+            {
+                Style = Res<Style>("GhostButton"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0),
+                Content = "Détecter les appareils branchés", IsEnabled = !_busy,
+                ToolTip = "L'écran passe quelques secondes sur chaque prise : il reste là où un appareil allumé envoie une image",
+            };
+            detect.Click += (_, _) => _ = DetectDevices(m);
+            stack.Children.Add(detect);
+        }
         return new Border { Style = Res<Style>("Panel"), Margin = new Thickness(0, 0, 0, 14), Child = stack };
     }
 
@@ -221,8 +302,15 @@ public partial class MainWindow : Window
 
         // haut : prise + état
         var top = new DockPanel();
-        var state = Text(on ? "AFFICHÉ" : "", "MonoText");
-        state.Foreground = dim;
+        var signal = _settings.SignalOf(m.Key, input);
+        var state = Text(on ? "AFFICHÉ" : signal switch { Signal.Present => "BRANCHÉ", Signal.Absent => "RIEN", _ => "" }, "MonoText");
+        state.ToolTip = signal switch
+        {
+            Signal.Present => "Un appareil allumé envoie une image sur cette prise (vu à la dernière détection)",
+            Signal.Absent => "Rien d'allumé sur cette prise à la dernière détection",
+            _ => null,
+        };
+        state.Foreground = !on && signal == Signal.Present ? Res<Brush>("GreenBrush") : dim;
         DockPanel.SetDock(state, Dock.Right);
         top.Children.Add(state);
         var port = new StackPanel { Orientation = Orientation.Horizontal };
@@ -285,7 +373,7 @@ public partial class MainWindow : Window
         {
             Style = Res<Style>("TileButton"), Tag = on ? "on" : null, Content = grid, Width = 236, Height = 132,
             Margin = new Thickness(0, 0, 12, 12), Foreground = fg,
-            ToolTip = on ? "Entrée affichée en ce moment" : $"Passer l'écran {m.Number} sur {Inputs.PortName(input)}",
+            ToolTip = on ? "Entrée affichée en ce moment" : $"Passer {The(m)} sur {Inputs.PortName(input)}",
         };
         b.Click += (_, _) => { if (_renaming == null) SwitchTo(m, input); };
         return b;
@@ -371,7 +459,7 @@ public partial class MainWindow : Window
         var menu = new Forms.ContextMenuStrip();
         foreach (var m in _monitors.Where(x => x.Responds))
         {
-            menu.Items.Add(new Forms.ToolStripMenuItem($"Écran {m.Number} · {m.Name}") { Enabled = false });
+            menu.Items.Add(new Forms.ToolStripMenuItem($"{m.Title} · {m.Name}") { Enabled = false });
             foreach (int input in m.Inputs)
             {
                 var mon = m;

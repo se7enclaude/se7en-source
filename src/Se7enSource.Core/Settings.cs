@@ -11,6 +11,18 @@ public sealed class Settings
     /// <summary>Par écran : les deux dernières entrées choisies (pour la touche « revenir »).</summary>
     public Dictionary<string, List<int>> Recent { get; set; } = [];
 
+    /// <summary>Par écran : ce que la dernière détection a vu sur chaque prise.</summary>
+    public Dictionary<string, Dictionary<int, Signal>> Signals { get; set; } = [];
+
+    public Signal SignalOf(string monitor, int input) =>
+        Signals.TryGetValue(monitor, out var d) && d.TryGetValue(input, out var s) ? s : Signal.Unknown;
+
+    public void SetSignal(string monitor, int input, Signal signal)
+    {
+        if (!Signals.TryGetValue(monitor, out var d)) Signals[monitor] = d = [];
+        d[input] = signal;
+    }
+
     public string NameOf(string monitor, int input) =>
         Names.TryGetValue(monitor, out var d) && d.TryGetValue(input, out var n) && !string.IsNullOrWhiteSpace(n) ? n : Inputs.PortName(input);
 
