@@ -57,7 +57,8 @@ public sealed class Ddc : IDisposable
                 for (int i = 0; i < arr.Length; i++)
                 {
                     string key = InterfaceId(device, i) ?? $"{device}#{i}";
-                    if (!_caps.TryGetValue(key, out var caps))
+                    // on ne garde que les réponses : un écran muet (DDC/CI coupé) est relu à chaque « Actualiser »
+                    if (!_caps.TryGetValue(key, out var caps) || caps == null)
                         _caps[key] = caps = ReadCaps(arr[i].Handle);
                     int? cur = ReadInput(arr[i].Handle);
                     var inputs = Inputs.FromCapabilities(caps);
