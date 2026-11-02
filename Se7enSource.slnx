@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Se7enSource.Core/Se7enSource.Core.csproj" />
+    <Project Path="src/Se7enSource/Se7enSource.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Se7enSource.Tests/Se7enSource.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,66 @@
+<Window x:Class="Se7enSource.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="se7en Source" Width="720" Height="700" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterScreen" Background="{StaticResource WindowBrush}"
+        WindowStyle="None" ResizeMode="CanResize" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display" FontFamily="{StaticResource FontSans}">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="56" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" />
+    </WindowChrome.WindowChrome>
+
+    <Grid Margin="26,0,26,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="76" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Barre de titre -->
+        <DockPanel Grid.Row="0" LastChildFill="True">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="RefreshButton" Style="{StaticResource GhostButton}" Margin="0,0,10,0" Click="OnRefresh"
+                        WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Relire les écrans branchés">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72C;" FontFamily="{StaticResource FontIcons}" FontSize="12" VerticalAlignment="Center" />
+                        <TextBlock Text="Actualiser" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ChromeButton}" Content="&#xE921;" Click="OnMinimize" ToolTip="Réduire" />
+                <Button Style="{StaticResource ChromeButton}" Content="&#xE8BB;" Margin="6,0,0,0" Click="OnClose"
+                        ToolTip="Fermer (l'appli reste près de l'horloge)" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="SE7EN SOURCE" Style="{StaticResource TitleText}" />
+                <TextBlock Text="Change l'entrée de ton écran en un clic" Style="{StaticResource LabelText}" Margin="16,3,0,0" />
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Écrans -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,-12,0" Padding="0,0,12,0">
+            <StackPanel x:Name="MonitorsPanel">
+                <TextBlock x:Name="LoadingText" Style="{StaticResource BodyText}" Margin="2,20,0,0"
+                           Text="Recherche des écrans… (quelques secondes la première fois)" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Bas : raccourci retour, lancement avec Windows, message -->
+        <StackPanel Grid.Row="2" Margin="0,14,0,0">
+            <Border Style="{StaticResource Panel}" Padding="18,12">
+                <DockPanel>
+                    <CheckBox x:Name="AutostartBox" DockPanel.Dock="Right" Style="{StaticResource Switch}" VerticalAlignment="Center"
+                              Content="Lancer avec Windows" Checked="OnAutostart" Unchecked="OnAutostart" />
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Background="{StaticResource RaisedBrush}" CornerRadius="6" Padding="8,3" VerticalAlignment="Center">
+                            <TextBlock Text="Ctrl+Alt+Maj+0" Style="{StaticResource MonoText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </Border>
+                        <TextBlock Text="revenir à l'entrée d'avant (ex. de la PS5 au PC)" Style="{StaticResource BodyText}"
+                                   Margin="10,0,0,0" VerticalAlignment="Center" FontSize="13" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+            <TextBlock x:Name="ToastText" Style="{StaticResource BodyText}" FontSize="13" Margin="4,10,0,0"
+                       Foreground="{StaticResource TextPrimaryBrush}" Visibility="Collapsed" />
+        </StackPanel>
+    </Grid>
+</Window>

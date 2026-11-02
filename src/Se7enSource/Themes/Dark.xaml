@@ -1,0 +1,87 @@
+<!--
+  Palette du design « Centrale » : matériel audio haut de gamme rencontré dans un HUD.
+  Quasi monochrome : rampe ink (châssis noir), steel (plateaux gris métal), bone (texte, lignes, sélection).
+  L'accent est le blanc ; les couleurs signal ne servent qu'aux LEDs, états et catégories de sources.
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Ink — châssis noir -->
+    <SolidColorBrush x:Key="Ink0Brush" Color="#000000" />
+    <SolidColorBrush x:Key="Ink50Brush" Color="#08080A" />
+    <SolidColorBrush x:Key="Ink100Brush" Color="#0F0F12" />
+    <SolidColorBrush x:Key="Ink150Brush" Color="#151519" />
+    <SolidColorBrush x:Key="Ink200Brush" Color="#1C1C21" />
+    <SolidColorBrush x:Key="Ink300Brush" Color="#26262C" />
+    <SolidColorBrush x:Key="Ink400Brush" Color="#34343B" />
+    <SolidColorBrush x:Key="Ink500Brush" Color="#4A4B53" />
+    <!-- Steel — plateau gris métal -->
+    <SolidColorBrush x:Key="Steel400Brush" Color="#8A8D98" />
+    <SolidColorBrush x:Key="Steel300Brush" Color="#A9ABB4" />
+    <SolidColorBrush x:Key="Steel200Brush" Color="#C7C9D0" />
+    <!-- Bone — lignes et texte clair -->
+    <SolidColorBrush x:Key="BoneBrush" Color="#E6E7EB" />
+    <SolidColorBrush x:Key="Bone50Brush" Color="#F4F4F6" />
+
+    <!-- Signal — LEDs, avec parcimonie -->
+    <Color x:Key="OrangeColor">#FF6A3D</Color>
+    <Color x:Key="RedColor">#FF3D33</Color>
+    <SolidColorBrush x:Key="OrangeBrush" Color="#FF6A3D" />
+    <SolidColorBrush x:Key="RedBrush" Color="#FF3D33" />
+    <SolidColorBrush x:Key="AmberBrush" Color="#FFA31A" />
+    <SolidColorBrush x:Key="VioletBrush" Color="#9A5CFF" />
+    <SolidColorBrush x:Key="CyanBrush" Color="#1FD6DD" />
+    <SolidColorBrush x:Key="GreenBrush" Color="#3EE08F" />
+
+    <!-- Surfaces -->
+    <SolidColorBrush x:Key="WindowBrush" Color="#000000" />
+    <SolidColorBrush x:Key="PanelBrush" Color="#0F0F12" />
+    <SolidColorBrush x:Key="RaisedBrush" Color="#1C1C21" />
+    <SolidColorBrush x:Key="WellBrush" Color="#08080A" />
+    <SolidColorBrush x:Key="HoverBrush" Color="#26262C" />
+    <SolidColorBrush x:Key="TrayBrush" Color="#8A8D98" />
+    <SolidColorBrush x:Key="InverseBrush" Color="#E6E7EB" />
+    <SolidColorBrush x:Key="MenuBrush" Color="#1C1C21" />
+    <SolidColorBrush x:Key="ScrimBrush" Color="#9E000000" />
+
+    <!-- Bordures et lignes -->
+    <SolidColorBrush x:Key="BorderSubtleBrush" Color="#0FFFFFFF" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#1FFFFFFF" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="#47FFFFFF" />
+    <SolidColorBrush x:Key="HudLineBrush" Color="#D1FFFFFF" />
+    <SolidColorBrush x:Key="GridLineBrush" Color="#12FFFFFF" />
+    <SolidColorBrush x:Key="DividerBrush" Color="#0FFFFFFF" />
+    <!-- Reflet interne 1 px en haut des modules -->
+    <SolidColorBrush x:Key="PanelSheenBrush" Color="#0AFFFFFF" />
+    <SolidColorBrush x:Key="TraySheenBrush" Color="#40FFFFFF" />
+
+    <!-- Texte -->
+    <SolidColorBrush x:Key="TextStrongBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E6E7EB" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A9ABB4" />
+    <SolidColorBrush x:Key="TextTertiaryBrush" Color="#8A8D98" />
+    <SolidColorBrush x:Key="TextDisabledBrush" Color="#4A4B53" />
+    <SolidColorBrush x:Key="TextInverseBrush" Color="#000000" />
+    <SolidColorBrush x:Key="TextOnTrayBrush" Color="#000000" />
+
+    <!-- Vu-mètres et pistes -->
+    <SolidColorBrush x:Key="MeterOffBrush" Color="#14FFFFFF" />
+    <SolidColorBrush x:Key="MeterOnBrush" Color="#E6E7EB" />
+    <SolidColorBrush x:Key="WellStrongBrush" Color="#1AFFFFFF" />
+
+    <!-- Catégories de sources : petites LEDs carrées (jamais d'aplat coloré) -->
+    <SolidColorBrush x:Key="ToneViolet" Color="#9A5CFF" />
+    <SolidColorBrush x:Key="ToneMint" Color="#3EE08F" />
+    <SolidColorBrush x:Key="ToneRose" Color="#FF6A3D" />
+    <SolidColorBrush x:Key="TonePeach" Color="#FFA31A" />
+    <SolidColorBrush x:Key="ToneSky" Color="#1FD6DD" />
+    <SolidColorBrush x:Key="ToneNeutral" Color="#C7C9D0" />
+
+    <!-- Ombres : biseaux plutôt qu'élévation ; halos pour les états allumés -->
+    <DropShadowEffect x:Key="RaisedShadow" Color="Black" BlurRadius="6" ShadowDepth="2" Direction="270" Opacity="0.6" />
+    <DropShadowEffect x:Key="PopShadow" Color="Black" BlurRadius="32" ShadowDepth="12" Direction="270" Opacity="0.7" />
+    <DropShadowEffect x:Key="WindowShadow" Color="Black" BlurRadius="60" ShadowDepth="20" Direction="270" Opacity="0.55" />
+    <DropShadowEffect x:Key="SelectedGlow" Color="White" BlurRadius="14" ShadowDepth="0" Opacity="0.28" />
+    <DropShadowEffect x:Key="LiveGlow" Color="#FF6A3D" BlurRadius="10" ShadowDepth="0" Opacity="0.85" />
+    <DropShadowEffect x:Key="DangerGlow" Color="#FF3D33" BlurRadius="12" ShadowDepth="0" Opacity="0.8" />
+</ResourceDictionary>
