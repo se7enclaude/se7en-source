@@ -33,10 +33,12 @@ public partial class MainWindow : Window
     // apprentissage : entrée attendue par écran, entrée inattendue vue N fois de suite, dernier ordre envoyé
     private readonly Dictionary<string, int> _expected = [];
     private readonly Dictionary<string, (int Input, int Count)> _pending = [];
-    private DateTime _lastSwitchAt = DateTime.MinValue;   // écrans dont on montre aussi les prises vides
+    private DateTime _lastSwitchAt = DateTime.MinValue;
+    private bool _openDiagnostic;   // écrans dont on montre aussi les prises vides
 
-    public MainWindow(bool startMinimized)
+    public MainWindow(bool startMinimized, bool diagnostic = false)
     {
+        _openDiagnostic = diagnostic;
         InitializeComponent();
         AutostartBox.IsChecked = Autostart.IsEnabled;
 
@@ -78,6 +80,11 @@ public partial class MainWindow : Window
         RegisterHotkeys();
         BuildUi();
         RebuildTrayMenu();
+        if (_openDiagnostic) // « se7en Source.exe --diagnostic » : ouvre directement le diagnostic (dépannage)
+        {
+            _openDiagnostic = false;
+            OnDiagnostic(this, new RoutedEventArgs());
+        }
     }
 
     private async void OnRefresh(object sender, RoutedEventArgs e)
@@ -259,6 +266,18 @@ public partial class MainWindow : Window
         Activate();
     }
 
+    private void OnDiagnostic(object sender, RoutedEventArgs e)
+    {
+        var w = new DiagnosticWindow(this, _ddc, _settings, _monitors, busy => _busy = busy, () =>
+        {
+            Save();
+            BuildUi();
+            RebuildTrayMenu();
+            RegisterHotkeys();
+        });
+        w.Show();
+    }
+
     private void OnIdentify(object sender, RoutedEventArgs e)
     {
         foreach (var m in _monitors)
@@ -323,7 +342,7 @@ public partial class MainWindow : Window
         {
             var hint = Text("L'écran ne dit pas où sont branchés tes appareils : il annonce toutes ses prises. Le plus simple : " +
                             "affiche une fois ta PS5 avec les boutons de l'écran, l'appli retient sa prise toute seule (au bout de " +
-                            "10 secondes). Ou allume-la et clique sur « Détecter les appareils branchés ».", "BodyText");
+                            "10 secondes). Ou allume-la et clique sur « Détecter les appareils branchés ». Toujours rien ? Bouton « Diagnostic » en haut.", "BodyText");
             hint.FontSize = 13;
             hint.Margin = new Thickness(2, 0, 0, 12);
             stack.Children.Add(hint);

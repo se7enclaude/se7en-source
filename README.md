@@ -9,6 +9,10 @@ Change l'entrée de ton écran en un clic (PC ↔ PS5, Switch, box…), dans le 
   (utile quand l'écran affiche la console et qu'on ne voit plus Windows).
 - **Essai aller-retour** : l'écran passe 8 s sur une entrée puis revient tout seul, pour vérifier que l'écran répond
   encore une fois sur une autre entrée.
+- **Diagnostic** (bouton, ou `--diagnostic`) : état DDC/CI de chaque écran, test de chaque prise, test avec les boutons de
+  l'écran (relevé de l'entrée toutes les 0,5 s), conclusion en clair (« l'écran ne reçoit aucune image de la console »…)
+  et rapport à copier.
+- Apprentissage : une prise affichée avec les boutons de l'écran est retenue (avec le code exact que l'écran utilise).
 - Icône près de l'horloge (menu des entrées), lancement avec Windows, une seule instance.
 
 L'ordre passe par DDC/CI (code VCP 0x60, norme MCCS) avec l'API Windows `dxva2` : aucun pilote, aucun droit admin.

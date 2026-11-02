@@ -19,6 +19,13 @@
         <!-- Barre de titre -->
         <DockPanel Grid.Row="0" LastChildFill="True">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="OnDiagnostic"
+                        WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Ta console n'est pas trouvée ? Vérification complète, avec conclusion">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource FontIcons}" FontSize="12" VerticalAlignment="Center" />
+                        <TextBlock Text="Diagnostic" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
                 <Button Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="OnIdentify"
                         WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Afficher le nom de chaque écran sur l'écran lui-même">
                     <StackPanel Orientation="Horizontal">

@@ -18,6 +18,8 @@ public sealed class Monitor
     public string Position { get; set; } = "";
     public string Title => string.IsNullOrEmpty(Position) ? $"Écran {Number}" : $"Écran {Position}";
     public IReadOnlyList<int> Inputs { get; init; } = [];
+    /// <summary>Chaîne de capacités DDC/CI brute (pour le rapport de diagnostic).</summary>
+    public string? Caps { get; init; }
     public int? Current { get; set; }
     /// <summary>L'écran répond en DDC/CI (sinon : option désactivée dans son menu, ou adaptateur qui la bloque).</summary>
     public bool Responds => Inputs.Count > 0 || Current != null;
@@ -68,7 +70,7 @@ public sealed class Ddc : IDisposable
                         Key = key, Device = device, IsPrimary = primary, Number = DisplayNumber(device),
                         Bounds = (rect.Left, rect.Top, rect.Right, rect.Bottom),
                         Name = Inputs.Model(caps) ?? FriendlyName(arr[i].Description),
-                        Inputs = inputs, Current = cur, Handle = arr[i].Handle,
+                        Inputs = inputs, Current = cur, Handle = arr[i].Handle, Caps = caps,
                     });
                 }
             }
@@ -85,6 +87,17 @@ public sealed class Ddc : IDisposable
         {
             m.Current = ReadInput(m.Handle) ?? m.Current;
             return m.Current;
+        }
+    }
+
+    /// <summary>Une seule lecture de l'entrée, sans garder l'ancienne valeur : null si l'écran ne répond pas (diagnostic).</summary>
+    public int? ReadRaw(Monitor m)
+    {
+        lock (_lock)
+        {
+            var target = _monitors.FirstOrDefault(x => x.Key == m.Key) ?? m;
+            return GetVCPFeatureAndVCPFeatureReply(target.Handle, Inputs.InputSourceCode, IntPtr.Zero, out uint cur, out _)
+                ? (int)(cur & 0xFF) : null;
         }
     }
 

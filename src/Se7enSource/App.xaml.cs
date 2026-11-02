@@ -29,7 +29,7 @@ public partial class App : Application
         }
 
         base.OnStartup(e);
-        var window = new MainWindow(startMinimized: e.Args.Contains("--minimized"));
+        var window = new MainWindow(startMinimized: e.Args.Contains("--minimized"), diagnostic: e.Args.Contains("--diagnostic"));
         MainWindow = window;
 
         var signal = _showSignal;
