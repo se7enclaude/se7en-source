@@ -29,7 +29,11 @@ public partial class MainWindow : Window
     private bool _busy;             // un changement d'entrée est en cours (l'écran met ~1 s à répondre)
     private bool _exiting, _trayHintShown;
     private (string Key, int Input)? _renaming;
-    private readonly HashSet<string> _showAll = [];   // écrans dont on montre aussi les prises vides
+    private readonly HashSet<string> _showAll = [];
+    // apprentissage : entrée attendue par écran, entrée inattendue vue N fois de suite, dernier ordre envoyé
+    private readonly Dictionary<string, int> _expected = [];
+    private readonly Dictionary<string, (int Input, int Count)> _pending = [];
+    private DateTime _lastSwitchAt = DateTime.MinValue;   // écrans dont on montre aussi les prises vides
 
     public MainWindow(bool startMinimized)
     {
@@ -48,7 +52,8 @@ public partial class MainWindow : Window
         _poll.Tick += async (_, _) => await PollCurrent();
 
         SourceInitialized += async (_, _) => await LoadMonitors();
-        IsVisibleChanged += (_, _) => { if (IsVisible) _poll.Start(); else _poll.Stop(); };
+        IsVisibleChanged += (_, _) => _poll.Interval = TimeSpan.FromSeconds(IsVisible ? 3 : 4);
+        _poll.Start();
         Closing += OnClosing;
 
         if (startMinimized) new WindowInteropHelper(this).EnsureHandle(); // raccourcis actifs, fenêtre cachée
@@ -89,11 +94,44 @@ public partial class MainWindow : Window
         if (live.Count == 0) return;
         var before = live.Select(m => m.Current).ToList();
         await Task.Run(() => { foreach (var m in live) _ddc.ReadCurrent(m); });
-        if (!before.SequenceEqual(live.Select(m => m.Current)))
+        bool learned = live.Aggregate(false, (any, m) => Learn(m) | any);
+        if (learned || !before.SequenceEqual(live.Select(m => m.Current)))
         {
             BuildUi();
             RebuildTrayMenu();
         }
+    }
+
+    /// <summary>
+    /// Apprentissage : l'écran affiche une autre entrée que celle demandée par l'appli (ses boutons, ou il a basculé
+    /// tout seul sur la console qui s'allume) et y reste : un appareil envoie une image sur cette prise. On la note,
+    /// avec le code exact que l'écran donne pour elle (certains écrans numérotent leurs prises à leur façon).
+    /// </summary>
+    private bool Learn(Services.Monitor m)
+    {
+        if (m.Current is not int cur) return false;
+        // juste après un ordre de l'appli, l'écran peut parcourir ses prises en cherchant une image : on attend
+        if (DateTime.UtcNow - _lastSwitchAt < TimeSpan.FromSeconds(25) || !_expected.TryGetValue(m.Key, out int expected))
+        {
+            _expected[m.Key] = cur;
+            _pending.Remove(m.Key);
+            return false;
+        }
+        if (cur == expected) { _pending.Remove(m.Key); return false; }
+        int seen = _pending.TryGetValue(m.Key, out var p) && p.Input == cur ? p.Count + 1 : 1;
+        _pending[m.Key] = (cur, seen);
+        if (seen < 3) return false; // il y reste (une dizaine de secondes) : ce n'est pas un passage en cherchant
+        _pending.Remove(m.Key);
+        _expected[m.Key] = cur;
+        _settings.Remember(m.Key, expected, cur); // Ctrl+Alt+Maj+0 ramène sur l'entrée d'avant
+        _lastMonitor = m.Key;
+        bool known = _settings.SignalOf(m.Key, cur) == Signal.Present || _settings.HasCustomName(m.Key, cur);
+        _settings.SetSignal(m.Key, cur, Signal.Present);
+        Save();
+        if (!known)
+            Toast($"Appareil trouvé sur {The(m)} : il envoie une image sur la prise « {Inputs.PortName(cur)} ». " +
+                  "Clique sur son crayon pour lui donner un nom (ex. PS5).", 15);
+        return true;
     }
 
     private void SwitchTo(Services.Monitor m, int input, bool quiet = false) => _ = SwitchToAsync(m, input, quiet);
@@ -108,12 +146,15 @@ public partial class MainWindow : Window
             return true;
         }
         _busy = true;
+        _lastSwitchAt = DateTime.UtcNow;
         bool ok = await Task.Run(() => _ddc.Switch(m, input));
+        _lastSwitchAt = DateTime.UtcNow;
         _busy = false;
         if (ok)
         {
             if (from is int f) _settings.Remember(m.Key, f, input);
             _lastMonitor = m.Key;
+            _expected[m.Key] = input;
             Save();
             if (!quiet) Toast($"{m.Title} → {Label(m, input)}");
         }
@@ -280,8 +321,9 @@ public partial class MainWindow : Window
         bool deviceKnown = m.Inputs.Any(i => i != m.Current && (_settings.SignalOf(m.Key, i) == Signal.Present || _settings.HasCustomName(m.Key, i)));
         if (!deviceKnown && m.Inputs.Count > 1)
         {
-            var hint = Text("L'écran ne dit pas où sont branchés tes appareils : il annonce toutes ses prises. Pour trouver ta PS5, " +
-                            "allume-la (pas en mode repos), puis clique sur « Détecter les appareils branchés » ci-dessous.", "BodyText");
+            var hint = Text("L'écran ne dit pas où sont branchés tes appareils : il annonce toutes ses prises. Le plus simple : " +
+                            "affiche une fois ta PS5 avec les boutons de l'écran, l'appli retient sa prise toute seule (au bout de " +
+                            "10 secondes). Ou allume-la et clique sur « Détecter les appareils branchés ».", "BodyText");
             hint.FontSize = 13;
             hint.Margin = new Thickness(2, 0, 0, 12);
             stack.Children.Add(hint);
