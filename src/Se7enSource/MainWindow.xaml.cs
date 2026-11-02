@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private bool _busy;             // un changement d'entrée est en cours (l'écran met ~1 s à répondre)
     private bool _exiting, _trayHintShown;
     private (string Key, int Input)? _renaming;
+    private readonly HashSet<string> _showAll = [];   // écrans dont on montre aussi les prises vides
 
     public MainWindow(bool startMinimized)
     {
@@ -272,20 +273,47 @@ public partial class MainWindow : Window
             return new Border { Style = Res<Style>("Panel"), Margin = new Thickness(0, 0, 0, 14), Child = stack, Opacity = 0.85 };
         }
 
+        // l'écran annonce toutes ses prises, branchées ou non : après une détection, les prises vides sont rangées
+        bool Shown(int i) => _showAll.Contains(m.Key) || m.Current == i || _settings.HasCustomName(m.Key, i)
+                             || _settings.SignalOf(m.Key, i) != Signal.Absent;
+        var empty = m.Inputs.Where(i => !Shown(i)).ToList();
+        bool deviceKnown = m.Inputs.Any(i => i != m.Current && (_settings.SignalOf(m.Key, i) == Signal.Present || _settings.HasCustomName(m.Key, i)));
+        if (!deviceKnown && m.Inputs.Count > 1)
+        {
+            var hint = Text("L'écran ne dit pas où sont branchés tes appareils : il annonce toutes ses prises. Pour trouver ta PS5, " +
+                            "allume-la (pas en mode repos), puis clique sur « Détecter les appareils branchés » ci-dessous.", "BodyText");
+            hint.FontSize = 13;
+            hint.Margin = new Thickness(2, 0, 0, 12);
+            stack.Children.Add(hint);
+        }
+
         var tiles = new WrapPanel();
-        foreach (int input in m.Inputs) tiles.Children.Add(Tile(m, input));
+        foreach (int input in m.Inputs.Where(Shown)) tiles.Children.Add(Tile(m, input));
         stack.Children.Add(tiles);
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
         if (m.Inputs.Count > 1)
         {
             var detect = new Button
             {
-                Style = Res<Style>("GhostButton"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0),
-                Content = "Détecter les appareils branchés", IsEnabled = !_busy,
+                Style = Res<Style>("GhostButton"), Content = "Détecter les appareils branchés", IsEnabled = !_busy,
                 ToolTip = "L'écran passe quelques secondes sur chaque prise : il reste là où un appareil allumé envoie une image",
             };
             detect.Click += (_, _) => _ = DetectDevices(m);
-            stack.Children.Add(detect);
+            row.Children.Add(detect);
         }
+        if (empty.Count > 0 || _showAll.Contains(m.Key))
+        {
+            int hidden = m.Inputs.Count(i => _settings.SignalOf(m.Key, i) == Signal.Absent && m.Current != i && !_settings.HasCustomName(m.Key, i));
+            var toggle = new Button
+            {
+                Style = Res<Style>("GhostButton"), Margin = new Thickness(8, 0, 0, 0),
+                Content = _showAll.Contains(m.Key) ? "Masquer les prises vides" : $"Afficher les prises vides ({hidden})",
+            };
+            toggle.Click += (_, _) => { if (!_showAll.Remove(m.Key)) _showAll.Add(m.Key); BuildUi(); };
+            row.Children.Add(toggle);
+        }
+        stack.Children.Add(row);
         return new Border { Style = Res<Style>("Panel"), Margin = new Thickness(0, 0, 0, 14), Child = stack };
     }
 
