@@ -9,7 +9,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>Se7enSource</AssemblyName>
     <Product>se7en Source</Product>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <!-- Seventh OS lit la version du .exe : pas de suffixe « +commit ». -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
