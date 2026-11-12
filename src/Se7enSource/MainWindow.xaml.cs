@@ -23,10 +23,15 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _toastTimer;
     private GlobalHotkeys? _hotkeys;
     private IReadOnlyList<Services.Monitor> _monitors = [];
-    // raccourcis Ctrl+Alt+Maj+1…9 : une entrée d'un écran chacun, dans l'ordre affiché
-    private readonly List<(Services.Monitor Monitor, int Input)> _slots = [];
+    // raccourcis Ctrl+Alt+Maj+1…9 enregistrés en ce moment : numéro -> écran et entrée (numéros gardés dans les réglages)
+    private readonly Dictionary<int, (string Monitor, int Input)> _slots = [];
     private string? _lastMonitor;   // dernier écran changé (pour « revenir à l'entrée d'avant »)
-    private bool _busy;             // un changement d'entrée est en cours (l'écran met ~1 s à répondre)
+    private bool _switching;        // un ordre de changement d'entrée est en cours (l'écran met ~1 s à répondre)
+    private string? _operation;     // séquence longue en cours (aller-retour, détection, test du diagnostic) : les autres ordres attendent
+    private bool _watching;         // test « avec les boutons de l'écran » du diagnostic : relevé arrêté, raccourcis actifs
+    private bool _polling, _loading;
+    private readonly DispatcherTimer _reload; // nouvelle recherche des écrans après un changement d'affichage ou une sortie de veille
+    private DiagnosticWindow? _diagnostic;
     private bool _exiting, _trayHintShown;
     private (string Key, int Input)? _renaming;
     private readonly HashSet<string> _showAll = [];
@@ -49,12 +54,19 @@ public partial class MainWindow : Window
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); ToastText.Visibility = Visibility.Collapsed; };
 
-        // l'entrée peut aussi changer depuis les boutons de l'écran : on la relit quand la fenêtre est visible
-        _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        // l'entrée peut aussi changer depuis les boutons de l'écran : on la relit (moins souvent quand la fenêtre est cachée)
+        _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         _poll.Tick += async (_, _) => await PollCurrent();
 
+        // écran rebranché, résolution changée, sortie de veille : les poignées DDC/CI ne valent plus rien, on recherche les écrans
+        _reload = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _reload.Tick += async (_, _) => await ReloadAfterChange();
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+        Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        _ddc.Reenumerated += () => Dispatcher.BeginInvoke(SyncMonitors);
+
         SourceInitialized += async (_, _) => await LoadMonitors();
-        IsVisibleChanged += (_, _) => _poll.Interval = TimeSpan.FromSeconds(IsVisible ? 3 : 4);
+        IsVisibleChanged += (_, _) => _poll.Interval = TimeSpan.FromSeconds(IsVisible ? 3 : 15);
         _poll.Start();
         Closing += OnClosing;
 
@@ -64,11 +76,23 @@ public partial class MainWindow : Window
 
     // ---------------------------------------------------------------- écrans
 
-    private async Task LoadMonitors()
+    private bool Locked => _switching || _operation != null;
+
+    private async Task LoadMonitors(bool rereadCaps = false)
     {
+        if (_loading) return;
+        _loading = true;
         RefreshButton.IsEnabled = false;
-        _monitors = await Task.Run(_ddc.Refresh);
-        RefreshButton.IsEnabled = true;
+        try
+        {
+            _ddc.SetKnownInputs(KnownInputs());
+            _monitors = await Task.Run(() => _ddc.Refresh(rereadCaps));
+        }
+        finally
+        {
+            _loading = false;
+            RefreshButton.IsEnabled = true;
+        }
         // l'entrée affichée au lancement est celle du PC : on la nomme tout de suite (si rien n'est encore nommé)
         foreach (var m in _monitors.Where(x => x.Responds && x.Current is int))
             if (!m.Inputs.Any(i => _settings.HasCustomName(m.Key, i)))
@@ -77,9 +101,7 @@ public partial class MainWindow : Window
                 _settings.SetSignal(m.Key, m.Current!.Value, Signal.Present);
                 Save();
             }
-        RegisterHotkeys();
-        BuildUi();
-        RebuildTrayMenu();
+        AfterMonitorsChanged();
         if (_openDiagnostic) // « se7en Source.exe --diagnostic » : ouvre directement le diagnostic (dépannage)
         {
             _openDiagnostic = false;
@@ -87,26 +109,77 @@ public partial class MainWindow : Window
         }
     }
 
+    private void AfterMonitorsChanged()
+    {
+        RegisterHotkeys();
+        BuildUi();
+        RebuildTrayMenu();
+    }
+
+    /// <summary>Un ordre a dû rechercher les écrans (Windows les avait perdus) : on reprend les nouveaux objets.</summary>
+    private void SyncMonitors()
+    {
+        if (_loading || _exiting) return; // la recherche en cours donnera la liste à jour
+        _monitors = _ddc.Monitors;
+        AfterMonitorsChanged();
+    }
+
+    /// <summary>Prises retenues dans les réglages, par écran : elles apparaissent même si l'écran ne les annonce pas.</summary>
+    private Dictionary<string, IReadOnlyList<int>> KnownInputs() =>
+        _settings.Names.Keys.Concat(_settings.Signals.Keys).Distinct().ToDictionary(k => k, _settings.KnownInputs);
+
+    private void OnDisplayChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(ScheduleReload);
+
+    private void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == Microsoft.Win32.PowerModes.Resume) Dispatcher.BeginInvoke(ScheduleReload);
+    }
+
+    private void ScheduleReload()
+    {
+        if (_exiting) return;
+        _reload.Stop(); // plusieurs événements de suite : une seule recherche, 2 s après le dernier
+        _reload.Start();
+    }
+
+    private async Task ReloadAfterChange()
+    {
+        _reload.Stop();
+        if (_exiting) return;
+        if (Locked || _watching || _loading) { _reload.Start(); return; } // après l'opération en cours
+        await LoadMonitors();
+    }
+
     private async void OnRefresh(object sender, RoutedEventArgs e)
     {
+        if (_loading) return;
+        if (Locked || _watching) { Toast(Wait()); return; }
         MonitorsPanel.Children.Clear();
         MonitorsPanel.Children.Add(LoadingText);
-        await LoadMonitors();
+        await LoadMonitors(rereadCaps: true);
     }
 
     private async Task PollCurrent()
     {
-        if (_busy || _renaming != null) return;
+        if (_polling || _loading || Locked || _watching || _renaming != null) return;
         var live = _monitors.Where(m => m.Responds).ToList();
         if (live.Count == 0) return;
-        var before = live.Select(m => m.Current).ToList();
-        await Task.Run(() => { foreach (var m in live) _ddc.ReadCurrent(m); });
-        bool learned = live.Aggregate(false, (any, m) => Learn(m) | any);
-        if (learned || !before.SequenceEqual(live.Select(m => m.Current)))
+        _polling = true; // un relevé lent (écran qui tarde) ne doit pas se superposer au suivant
+        try
         {
-            BuildUi();
-            RebuildTrayMenu();
+            var before = live.Select(m => m.Current).ToList();
+            var inputsBefore = live.Select(m => m.Inputs.Count).ToList();
+            await Task.Run(() => { foreach (var m in live) _ddc.ReadCurrent(m); });
+            if (Locked || _watching || _loading) return; // un ordre est parti pendant le relevé : l'apprentissage attendra
+            bool learned = live.Aggregate(false, (any, m) => Learn(m) | any);
+            if (!inputsBefore.SequenceEqual(live.Select(m => m.Inputs.Count))) RegisterHotkeys();
+            if (learned || !before.SequenceEqual(live.Select(m => m.Current)))
+            {
+                BuildUi();
+                RebuildTrayMenu();
+            }
         }
+        finally { _polling = false; }
     }
 
     /// <summary>
@@ -135,28 +208,79 @@ public partial class MainWindow : Window
         bool known = _settings.SignalOf(m.Key, cur) == Signal.Present || _settings.HasCustomName(m.Key, cur);
         _settings.SetSignal(m.Key, cur, Signal.Present);
         Save();
+        AddInput(m, cur);
         if (!known)
             Toast($"Appareil trouvé sur {The(m)} : il envoie une image sur la prise « {Inputs.PortName(cur)} ». " +
                   "Clique sur son crayon pour lui donner un nom (ex. PS5).", 15);
         return true;
     }
 
+    /// <summary>Une prise vue sur l'écran mais absente de ses capacités : on l'ajoute à ses tuiles.</summary>
+    private void AddInput(Services.Monitor m, int input)
+    {
+        if (m.Inputs.Contains(input)) return;
+        m.Inputs = [.. m.Inputs, input];
+        var same = _ddc.Monitors.FirstOrDefault(x => x.Key == m.Key);
+        if (same != null && same != m && !same.Inputs.Contains(input)) same.Inputs = [.. same.Inputs, input];
+        _ddc.SetKnownInputs(KnownInputs());
+    }
+
+    private string Wait() => _watching && _operation == null && !_switching
+        ? "Patiente : un test du diagnostic est en cours."
+        : $"Patiente : {_operation ?? "un changement d'entrée"} est en cours.";
+
+    /// <summary>Prend le verrou pour une séquence longue : aucun autre ordre ne passe tant qu'elle dure.</summary>
+    private bool BeginOperation(string what)
+    {
+        if (Locked || _watching || _loading)
+        {
+            Toast(_loading && !Locked && !_watching ? "Patiente : recherche des écrans en cours." : Wait());
+            return false;
+        }
+        _operation = what;
+        BuildUi();
+        return true;
+    }
+
+    private void EndOperation()
+    {
+        _operation = null;
+        BuildUi();
+        RebuildTrayMenu();
+    }
+
+    private bool CanStartOperation()
+    {
+        if (!Locked && !_watching && !_loading) return true;
+        Toast(_loading && !Locked && !_watching ? "Patiente : recherche des écrans en cours." : Wait());
+        return false;
+    }
+
     private void SwitchTo(Services.Monitor m, int input, bool quiet = false) => _ = SwitchToAsync(m, input, quiet);
 
-    private async Task<bool> SwitchToAsync(Services.Monitor m, int input, bool quiet = false)
+    /// <param name="owned">Appelé par la séquence qui tient le verrou (aller-retour, détection).</param>
+    private async Task<bool> SwitchToAsync(Services.Monitor m, int input, bool quiet = false, bool owned = false)
     {
-        if (_busy) return false;
+        if (_switching || (_operation != null && !owned))
+        {
+            if (!quiet) Toast(Wait());
+            return false;
+        }
         int? from = m.Current;
         if (from == input)
         {
             if (!quiet) Toast($"{_settings.NameOf(m.Key, input)} est déjà affiché sur {The(m)}.");
             return true;
         }
-        _busy = true;
+        _switching = true;
         _lastSwitchAt = DateTime.UtcNow;
-        bool ok = await Task.Run(() => _ddc.Switch(m, input));
-        _lastSwitchAt = DateTime.UtcNow;
-        _busy = false;
+        bool ok;
+        try { ok = await Task.Run(() => _ddc.Switch(m, input)); }
+        finally
+        {
+            _lastSwitchAt = DateTime.UtcNow;
+            _switching = false;
+        }
         if (ok)
         {
             if (from is int f) _settings.Remember(m.Key, f, input);
@@ -176,16 +300,27 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Ctrl+Alt+Maj+0 : l'écran changé en dernier revient sur l'entrée d'avant.</summary>
-    private void SwitchBack()
+    private void SwitchBack() => _ = SwitchBackAsync();
+
+    private async Task SwitchBackAsync()
     {
+        if (Locked) { Toast(Wait()); return; }
         var m = _monitors.FirstOrDefault(x => x.Key == _lastMonitor && x.Responds)
                 ?? _monitors.FirstOrDefault(x => x.Responds && x.Current is int c && _settings.Previous(x.Key, c) != null);
-        if (m?.Current is not int cur || _settings.Previous(m.Key, cur) is not int prev)
+        if (m == null)
         {
             Toast("Pas encore d'entrée d'avant : change d'entrée une première fois.");
             return;
         }
-        SwitchTo(m, prev);
+        // l'entrée a pu changer avec les boutons de l'écran sans être relue (test du diagnostic, fenêtre cachée) : on la relit
+        int? raw = await Task.Run(() => _ddc.ReadRaw(m));
+        if (raw is int r) m.Current = r;
+        if (m.Current is not int cur || _settings.Previous(m.Key, cur) is not int prev)
+        {
+            Toast("Pas encore d'entrée d'avant : change d'entrée une première fois.");
+            return;
+        }
+        await SwitchToAsync(m, prev);
     }
 
     /// <summary>
@@ -194,59 +329,75 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task TryRoundTrip(Services.Monitor m, int input)
     {
-        if (m.Current is not int back || _busy) return;
+        if (m.Current is not int back || !CanStartOperation()) return;
         var answer = MessageBox.Show(this,
             $"{Cap(The(m))} va afficher {Inputs.PortName(input)} pendant 8 secondes, puis revenir tout seul sur " +
             $"{Inputs.PortName(back)}.\n\nSi rien n'est allumé sur {Inputs.PortName(input)}, il affichera « pas de signal » : c'est normal.\n\nOn essaie ?",
             "Essayer l'aller-retour", MessageBoxButton.OKCancel, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.OK) return;
+        if (answer != MessageBoxResult.OK || !BeginOperation("un essai d'aller-retour")) return;
 
-        Toast($"Essai : {The(m)} passe sur {Inputs.PortName(input)} et revient dans 8 secondes…", 12);
-        if (!await SwitchToAsync(m, input, quiet: true))
+        try
         {
-            Toast($"{Cap(The(m))} n'accepte pas l'ordre de changer d'entrée.");
-            return;
+            Toast($"Essai : {The(m)} passe sur {Inputs.PortName(input)} et revient dans 8 secondes…", 12);
+            if (!await SwitchToAsync(m, input, quiet: true, owned: true))
+            {
+                Toast($"{Cap(The(m))} n'accepte pas l'ordre de changer d'entrée.");
+                return;
+            }
+            await Task.Delay(8000);
+            bool ok = await SwitchToAsync(m, back, quiet: true, owned: true);
+            await Task.Delay(1500);
+            // vraie lecture : la valeur gardée est celle que l'appli vient d'écrire, elle ne prouve rien
+            int? now = await Task.Run(() => _ddc.ReadRaw(m));
+            if (now is int n) m.Current = n;
+            if (ok && now == back)
+                Toast($"Aller-retour réussi : {Inputs.PortName(input)} puis retour sur {Inputs.PortName(back)}. Tout marche, y compris le raccourci pour revenir.", 10);
+            else if (ok && now == null)
+                Toast($"Retour envoyé, mais non confirmé : l'écran ne répond pas au PC. S'il n'affiche pas {Inputs.PortName(back)}, " +
+                      "utilise le bouton de l'écran (ou active sa « détection automatique de l'entrée »).", 14);
+            else
+                Toast($"Le retour n'a pas marché : une fois sur {Inputs.PortName(input)}, l'écran ne répond plus au PC. " +
+                      "Pour revenir, utilise le bouton de l'écran (ou active sa « détection automatique de l'entrée »).", 14);
         }
-        await Task.Delay(8000);
-        bool ok = await SwitchToAsync(m, back, quiet: true);
-        await Task.Delay(1500);
-        int? now = await Task.Run(() => _ddc.ReadCurrent(m));
-        if (ok && now == back)
-            Toast($"Aller-retour réussi : {Inputs.PortName(input)} puis retour sur {Inputs.PortName(back)}. Tout marche, y compris le raccourci pour revenir.", 10);
-        else
-            Toast($"Le retour n'a pas marché : une fois sur {Inputs.PortName(input)}, l'écran ne répond plus au PC. " +
-                  "Pour revenir, utilise le bouton de l'écran (ou active sa « détection automatique de l'entrée »).", 14);
+        finally { EndOperation(); }
         Activate();
     }
 
     /// <summary>Détecte les appareils branchés : l'écran passe sur chaque prise et on regarde s'il y reste.</summary>
     private async Task DetectDevices(Services.Monitor m)
     {
-        if (_busy || m.Current is not int pc) return;
+        if (m.Current is not int pc || !CanStartOperation()) return;
         var others = m.Inputs.Where(i => i != pc).ToList();
         var answer = MessageBox.Show(this,
             $"{Cap(The(m))} va passer environ 6 secondes sur chaque autre prise ({string.Join(", ", others.Select(Inputs.PortName))}), " +
             $"puis revenir sur {Label(m, pc)}. Il va s'éteindre et se rallumer plusieurs fois : c'est normal.\n\n" +
             "Allume d'abord la PS5 (ou l'appareil à trouver). On y va ?",
             "Détecter les appareils branchés", MessageBoxButton.OKCancel, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.OK) return;
+        if (answer != MessageBoxResult.OK || !BeginOperation("la détection des appareils")) return;
 
         var stayed = new Dictionary<int, bool>();
-        for (int k = 0; k < others.Count; k++)
+        var unconfirmed = new List<int>(); // l'écran ne répondait plus : on ne sait pas, rien n'est changé pour cette prise
+        try
         {
-            int input = others[k];
-            Toast($"Détection {k + 1}/{others.Count} : {Inputs.PortName(input)}…", 15);
-            if (!await SwitchToAsync(m, input, quiet: true))
+            for (int k = 0; k < others.Count; k++)
             {
-                await SwitchToAsync(m, pc, quiet: true);
-                Toast($"{Cap(The(m))} n'accepte pas l'ordre de changer d'entrée.");
-                return;
+                int input = others[k];
+                Toast($"Détection {k + 1}/{others.Count} : {Inputs.PortName(input)}…", 15);
+                if (!await SwitchToAsync(m, input, quiet: true, owned: true))
+                {
+                    await SwitchToAsync(m, pc, quiet: true, owned: true);
+                    Toast($"{Cap(The(m))} n'accepte pas l'ordre de changer d'entrée.");
+                    return;
+                }
+                await Task.Delay(6000);
+                // vraie lecture : la valeur gardée est celle que l'appli vient d'écrire
+                int? now = await Task.Run(() => _ddc.ReadRaw(m));
+                if (now is int n) stayed[input] = n == input;
+                else unconfirmed.Add(input);
             }
-            await Task.Delay(6000);
-            int? now = await Task.Run(() => _ddc.ReadCurrent(m));
-            stayed[input] = now == input;
+            await SwitchToAsync(m, pc, quiet: true, owned: true);
         }
-        await SwitchToAsync(m, pc, quiet: true);
+        finally { EndOperation(); }
         // pour la touche « revenir », l'entrée d'avant n'est pas une prise essayée pendant la détection
         _settings.Recent.Remove(m.Key);
 
@@ -256,7 +407,10 @@ public partial class MainWindow : Window
         BuildUi();
         RebuildTrayMenu();
         var found = result.Where(r => r.Key != pc && r.Value == Signal.Present).Select(r => Inputs.PortName(r.Key)).ToList();
-        if (result.Where(r => r.Key != pc).All(r => r.Value == Signal.Unknown))
+        if (unconfirmed.Count == others.Count)
+            Toast("L'écran ne répond plus au PC dès qu'il quitte sa prise : impossible de savoir où est branché l'appareil. " +
+                  "Affiche-le une fois avec les boutons de l'écran (l'appli retient sa prise), ou bouton « Diagnostic ».", 14);
+        else if (result.Where(r => r.Key != pc).All(r => r.Value == Signal.Unknown))
             Toast("Cet écran reste sur chaque prise même sans image : impossible de savoir lesquelles sont branchées. " +
                   "Allume l'appareil, puis clique sur ses prises une par une.", 14);
         else if (found.Count == 0)
@@ -268,14 +422,43 @@ public partial class MainWindow : Window
 
     private void OnDiagnostic(object sender, RoutedEventArgs e)
     {
-        var w = new DiagnosticWindow(this, _ddc, _settings, _monitors, busy => _busy = busy, () =>
+        if (_diagnostic != null) // une seule fenêtre de diagnostic : on ramène celle qui est ouverte
+        {
+            if (_diagnostic.WindowState == WindowState.Minimized) _diagnostic.WindowState = WindowState.Normal;
+            _diagnostic.Activate();
+            return;
+        }
+        var w = new DiagnosticWindow(this, _ddc, _settings, _monitors, BeginDiagnosticTest, EndDiagnosticTest, () =>
         {
             Save();
             BuildUi();
             RebuildTrayMenu();
             RegisterHotkeys();
         });
+        _diagnostic = w;
+        w.Closed += (_, _) => _diagnostic = null;
         w.Show();
+    }
+
+    /// <summary>
+    /// Test du diagnostic. Automatique : il tient le verrou (aucun autre ordre). Avec les boutons de l'écran : seul le
+    /// relevé s'arrête, les raccourcis restent actifs (Ctrl+Alt+Maj+0 pour revenir sur le PC, comme le dit la fenêtre).
+    /// </summary>
+    private bool BeginDiagnosticTest(bool manual)
+    {
+        if (Locked || _watching || _loading) return false;
+        if (manual) _watching = true;
+        else _operation = "le test du diagnostic";
+        BuildUi();
+        return true;
+    }
+
+    private void EndDiagnosticTest()
+    {
+        _watching = false;
+        _operation = null;
+        BuildUi();
+        RebuildTrayMenu();
     }
 
     private void OnIdentify(object sender, RoutedEventArgs e)
@@ -297,8 +480,9 @@ public partial class MainWindow : Window
 
     private string? ShortcutOf(Services.Monitor m, int input)
     {
-        int i = _slots.FindIndex(s => s.Monitor.Key == m.Key && s.Input == input);
-        return i >= 0 ? $"Ctrl+Alt+Maj+{i + 1}" : null;
+        foreach (var (n, s) in _slots)
+            if (s.Monitor == m.Key && s.Input == input) return $"Ctrl+Alt+Maj+{n}";
+        return null;
     }
 
     private void BuildUi()
@@ -357,7 +541,7 @@ public partial class MainWindow : Window
         {
             var detect = new Button
             {
-                Style = Res<Style>("GhostButton"), Content = "Détecter les appareils branchés", IsEnabled = !_busy,
+                Style = Res<Style>("GhostButton"), Content = "Détecter les appareils branchés", IsEnabled = !Locked && !_watching,
                 ToolTip = "L'écran passe quelques secondes sur chaque prise : il reste là où un appareil allumé envoie une image",
             };
             detect.Click += (_, _) => _ = DetectDevices(m);
@@ -527,18 +711,24 @@ public partial class MainWindow : Window
         _hotkeys?.Dispose();
         _hotkeys = new GlobalHotkeys(new WindowInteropHelper(this).Handle);
         _slots.Clear();
-        foreach (var m in _monitors.Where(x => x.Responds))
-            foreach (int input in m.Inputs)
-                if (_slots.Count < 9) _slots.Add((m, input));
+        // numéros gardés dans les réglages, par écran et par entrée : un écran muet ne décale pas ceux des autres
+        var available = _monitors.Where(x => x.Responds).SelectMany(m => m.Inputs.Select(i => (m.Key, i))).ToList();
+        if (_settings.AssignSlots(available)) Save();
+        foreach (var (n, slot) in _settings.Slots)
+            if (available.Contains((slot.Monitor, slot.Input))) _slots[n] = (slot.Monitor, slot.Input);
 
         var failed = new List<string>();
-        for (int i = 0; i < _slots.Count; i++)
-        {
-            var (m, input) = _slots[i];
-            if (!_hotkeys.Register(Key.D1 + i, () => SwitchTo(m, input))) failed.Add($"Ctrl+Alt+Maj+{i + 1}");
-        }
+        foreach (var (n, (key, input)) in _slots.OrderBy(s => s.Key))
+            if (!_hotkeys.Register(Key.D0 + n, () => SwitchToSlot(key, input))) failed.Add($"Ctrl+Alt+Maj+{n}");
         if (!_hotkeys.Register(Key.D0, SwitchBack)) failed.Add("Ctrl+Alt+Maj+0");
         if (failed.Count > 0) Toast("Raccourcis déjà pris par une autre appli : " + string.Join(", ", failed));
+    }
+
+    /// <summary>Raccourci pressé : l'écran est retrouvé par sa clé (la liste a pu être relue depuis).</summary>
+    private void SwitchToSlot(string key, int input)
+    {
+        if (_monitors.FirstOrDefault(x => x.Key == key && x.Responds) is Services.Monitor m) SwitchTo(m, input);
+        else Toast("Cet écran ne répond pas en ce moment : « Actualiser », puis réessaie.");
     }
 
     // ---------------------------------------------------------------- icône près de l'horloge
@@ -613,6 +803,9 @@ public partial class MainWindow : Window
     private void ExitApp()
     {
         _exiting = true;
+        _reload.Stop();
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
+        Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _hotkeys?.Dispose();
         _tray.Visible = false;
         _tray.Dispose();

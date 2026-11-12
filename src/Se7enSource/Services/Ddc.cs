@@ -17,7 +17,8 @@ public sealed class Monitor
     /// <summary>« de gauche », « de droite »… (voir Layout.PositionNames).</summary>
     public string Position { get; set; } = "";
     public string Title => string.IsNullOrEmpty(Position) ? $"Écran {Number}" : $"Écran {Position}";
-    public IReadOnlyList<int> Inputs { get; init; } = [];
+    /// <summary>Prises : celles des capacités, plus celles retenues dans les réglages et l'entrée affichée.</summary>
+    public IReadOnlyList<int> Inputs { get; internal set; } = [];
     /// <summary>Chaîne de capacités DDC/CI brute (pour le rapport de diagnostic).</summary>
     public string? Caps { get; init; }
     public int? Current { get; set; }
@@ -33,15 +34,31 @@ public sealed class Ddc : IDisposable
     private readonly List<Monitor> _monitors = [];
     // la chaîne de capacités met 1 à 2 s à arriver : gardée par écran
     private readonly Dictionary<string, string?> _caps = [];
+    // prises connues par écran hors capacités (réglages : nommées, ou appareil vu), fusionnées dans Monitor.Inputs
+    private Dictionary<string, IReadOnlyList<int>> _known = [];
 
     public IReadOnlyList<Monitor> Monitors { get { lock (_lock) return [.. _monitors]; } }
 
+    /// <summary>
+    /// Les écrans ont été recherchés à nouveau pendant un changement d'entrée (les anciens objets Monitor ne sont plus
+    /// valides) : à relire avec <see cref="Monitors"/>. Appelé hors du fil de l'interface.
+    /// </summary>
+    public event Action? Reenumerated;
+
+    /// <summary>Prises retenues dans les réglages, par écran (fusionnées à la prochaine recherche).</summary>
+    public void SetKnownInputs(Dictionary<string, IReadOnlyList<int>> known)
+    {
+        lock (_lock) _known = known;
+    }
+
     /// <summary>Relit la liste des écrans (lent la première fois : quelques secondes par écran).</summary>
-    public IReadOnlyList<Monitor> Refresh()
+    /// <param name="rereadCaps">Relire aussi les chaînes de capacités (bouton « Actualiser »).</param>
+    public IReadOnlyList<Monitor> Refresh(bool rereadCaps = false)
     {
         lock (_lock)
         {
             Release();
+            if (rereadCaps) _caps.Clear();
             var found = new List<(IntPtr HMon, string Device, bool Primary, Rect Rect)>();
             EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
             {
@@ -59,12 +76,18 @@ public sealed class Ddc : IDisposable
                 for (int i = 0; i < arr.Length; i++)
                 {
                     string key = InterfaceId(device, i) ?? $"{device}#{i}";
-                    // on ne garde que les réponses : un écran muet (DDC/CI coupé) est relu à chaque « Actualiser »
-                    if (!_caps.TryGetValue(key, out var caps) || caps == null)
-                        _caps[key] = caps = ReadCaps(arr[i].Handle);
+                    // on ne garde que les réponses complètes : une chaîne tronquée (sans la liste des prises) est relue la fois suivante
+                    if (!_caps.TryGetValue(key, out var caps))
+                    {
+                        caps = ReadCaps(arr[i].Handle);
+                        if (Inputs.FromCapabilities(caps).Count > 0) _caps[key] = caps;
+                    }
                     int? cur = ReadInput(arr[i].Handle);
-                    var inputs = Inputs.FromCapabilities(caps);
-                    if (inputs.Count == 0 && cur is int c) inputs = [c]; // écran muet sur ses capacités mais qui répond
+                    var inputs = Inputs.FromCapabilities(caps).ToList();
+                    // prises apprises hors capacités (certains écrans numérotent leurs prises à leur façon), entrée affichée
+                    if (_known.TryGetValue(key, out var known))
+                        foreach (int k in known) if (!inputs.Contains(k)) inputs.Add(k);
+                    if (cur is int c && !inputs.Contains(c)) inputs.Add(c);
                     _monitors.Add(new Monitor
                     {
                         Key = key, Device = device, IsPrimary = primary, Number = DisplayNumber(device),
@@ -85,8 +108,10 @@ public sealed class Ddc : IDisposable
     {
         lock (_lock)
         {
-            m.Current = ReadInput(m.Handle) ?? m.Current;
-            return m.Current;
+            // l'objet reçu peut dater d'avant une nouvelle recherche des écrans (poignée détruite) : on le retrouve par sa clé
+            if (Find(m) is not Monitor target) return m.Current; // écran disparu : on ne touche pas à une poignée détruite
+            target.Current = ReadInput(target.Handle) ?? target.Current;
+            return m.Current = target.Current;
         }
     }
 
@@ -95,7 +120,7 @@ public sealed class Ddc : IDisposable
     {
         lock (_lock)
         {
-            var target = _monitors.FirstOrDefault(x => x.Key == m.Key) ?? m;
+            if (Find(m) is not Monitor target) return null;
             return GetVCPFeatureAndVCPFeatureReply(target.Handle, Inputs.InputSourceCode, IntPtr.Zero, out uint cur, out _)
                 ? (int)(cur & 0xFF) : null;
         }
@@ -107,22 +132,28 @@ public sealed class Ddc : IDisposable
     /// </summary>
     public bool Switch(Monitor m, int input)
     {
+        bool ok = false, reenumerated = false;
         lock (_lock)
         {
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < 3 && !ok; attempt++)
             {
-                var target = _monitors.FirstOrDefault(x => x.Key == m.Key) ?? m;
-                if (SetVCPFeature(target.Handle, Inputs.InputSourceCode, (uint)input))
+                var target = Find(m);
+                if (target != null && SetVCPFeature(target.Handle, Inputs.InputSourceCode, (uint)input))
                 {
                     target.Current = m.Current = input;
-                    return true;
+                    ok = true;
+                    break;
                 }
                 Thread.Sleep(150);
-                if (attempt == 1) Refresh(); // le verrou est réentrant ; les capacités restent en cache
+                if (attempt == 1) { Refresh(); reenumerated = true; } // le verrou est réentrant ; les capacités restent en cache
             }
-            return false;
         }
+        if (reenumerated) Reenumerated?.Invoke(); // hors du verrou
+        return ok;
     }
+
+    /// <summary>L'écran de même clé dans la liste actuelle (l'objet reçu peut dater d'avant une nouvelle recherche).</summary>
+    private Monitor? Find(Monitor m) => _monitors.Contains(m) ? m : _monitors.FirstOrDefault(x => x.Key == m.Key);
 
     private static string? ReadCaps(IntPtr h)
     {

@@ -16,7 +16,8 @@ public sealed class DiagnosticWindow : Window
     private readonly Ddc _ddc;
     private readonly Settings _settings;
     private readonly IReadOnlyList<Services.Monitor> _monitors;
-    private readonly Action<bool> _setBusy;
+    private readonly Func<bool, bool> _begin; // prend le verrou de l'appli (true : test avec les boutons) ; false si autre chose tourne
+    private readonly Action _end;
     private readonly Action _changed;
     private readonly StringBuilder _report = new();
     private readonly StackPanel _body = new();
@@ -26,13 +27,14 @@ public sealed class DiagnosticWindow : Window
     private readonly TextBlock _status;
     private bool _running;
 
-    public DiagnosticWindow(Window owner, Ddc ddc, Settings settings, IReadOnlyList<Services.Monitor> monitors, Action<bool> setBusy, Action changed)
+    public DiagnosticWindow(Window owner, Ddc ddc, Settings settings, IReadOnlyList<Services.Monitor> monitors, Func<bool, bool> begin, Action end, Action changed)
     {
         Owner = owner;
         _ddc = ddc;
         _settings = settings;
         _monitors = monitors;
-        _setBusy = setBusy;
+        _begin = begin;
+        _end = end;
         _changed = changed;
         Title = "se7en Source · Diagnostic";
         Width = 760;
@@ -152,7 +154,7 @@ public sealed class DiagnosticWindow : Window
         var live = Body("", 13, dim: true);
         card.Children.Add(live);
         List<Sample> samples;
-        Running(true);
+        if (!Running(true, manual: true)) { live.Text = Busy; return; }
         try { samples = await Record(m, 60, s => live.Text = s); }
         finally { Running(false); }
         var v = Diagnosis.Analyze(pc, samples);
@@ -172,13 +174,13 @@ public sealed class DiagnosticWindow : Window
                                        $"puis revenir sur {Port(pc)}. Il va s'éteindre et se rallumer : c'est normal.\n\nAllume d'abord la console. On y va ?",
                                  "Tester chaque prise", MessageBoxButton.OKCancel, MessageBoxImage.Question);
         if (ok != MessageBoxResult.OK) return;
+        if (!Running(true)) { Status(Busy); return; }
 
         var card = Card($"Test de chaque prise · {m.Title}");
         var live = Body("", 13, dim: true);
         card.Children.Add(live);
         var found = new List<int>();
         var results = new List<(int Input, Verdict V, bool Accepted)>();
-        Running(true);
         try
         {
             foreach (int input in others)
@@ -246,12 +248,19 @@ public sealed class DiagnosticWindow : Window
         return samples;
     }
 
-    /// <summary>Test en cours : boutons grisés, l'appli principale ne relit plus l'écran, fenêtre non fermable.</summary>
-    private void Running(bool on)
+    private const string Busy = "Patiente : un changement d'entrée est en cours dans la fenêtre principale, puis relance le test.";
+
+    /// <summary>
+    /// Test en cours : boutons grisés, l'appli principale ne relit plus l'écran, fenêtre non fermable. Test automatique :
+    /// les autres ordres attendent. Test avec les boutons : les raccourcis restent actifs (Ctrl+Alt+Maj+0 pour revenir).
+    /// </summary>
+    private bool Running(bool on, bool manual = false)
     {
+        if (on && !_begin(manual)) return false;
+        if (!on) _end();
         _running = on;
-        _setBusy(on);
         _autoButton.IsEnabled = _manualButton.IsEnabled = _screens.IsEnabled = !on;
+        return true;
     }
 
     private UIElement Conclusion(Services.Monitor m, int pc, Verdict v, bool manual)

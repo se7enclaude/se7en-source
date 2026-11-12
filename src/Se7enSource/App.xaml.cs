@@ -28,6 +28,20 @@ public partial class App : Application
             return;
         }
 
+        // filet : une erreur imprévue est notée dans le journal au lieu de fermer l'appli (les raccourcis restent actifs)
+        DispatcherUnhandledException += (_, ev) =>
+        {
+            Services.Log.Error("Interface", ev.Exception);
+            ev.Handled = true;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
+            Services.Log.Error(ev.IsTerminating ? "Erreur fatale" : "Erreur", ev.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, ev) =>
+        {
+            Services.Log.Error("Tâche", ev.Exception);
+            ev.SetObserved();
+        };
+
         base.OnStartup(e);
         var window = new MainWindow(startMinimized: e.Args.Contains("--minimized"), diagnostic: e.Args.Contains("--diagnostic"));
         MainWindow = window;
